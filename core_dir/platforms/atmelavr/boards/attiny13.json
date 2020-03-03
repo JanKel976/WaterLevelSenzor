@@ -1,0 +1,22 @@
+{
+  "build": {
+    "core": "core13",
+    "extra_flags": "-DARDUINO_AVR_ATTINY13",
+    "f_cpu": "1200000L",
+    "mcu": "attiny13"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "Generic ATtiny13",
+  "upload": {
+    "extra_flags": "-e",
+    "maximum_ram_size": 64,
+    "maximum_size": 1024,
+    "protocol": "arduinoisp",
+    "require_upload_port": true,
+    "speed": 19200
+  },
+  "url": "http://www.atmel.com/devices/ATTINY13.aspx",
+  "vendor": "Atmel"
+}

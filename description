@@ -3,8 +3,8 @@ Riadenie a senzory v dome.
 Siet controlerov pomocou nRF24l01 s vyuzitim "pipes" a datovych balikov definovanych pomocou struct. 
 V sieti sa nachadza 7 hlavnych bodov:
 
-RaiTan - Tank na dazdovu vodu
-P1Cont - Ovladanie solenoidov pri pumpe v pivnici
+node 01 - RaiTan - Tank na dazdovu vodu
+node 02 - P1Cont - Ovladanie solenoidov pri pumpe v pivnici
 Centra - Centrala
 ....
 ....

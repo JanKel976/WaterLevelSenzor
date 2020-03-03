@@ -7,16 +7,25 @@
 #include <printf.h>
 #include <SPI.h>
 */
+
 RF24 radio(9,10);                            // Set up nRF24L01 radio on SPI bus plus pins 7 & 8
 /*** Topology ***/
-byte addresses[][6] = {"1Node","2Node"};     // Radio pipe addresses for the 2 nodes to communicate.
+RF24Network network(radio); 
 
+const uint16_t this_node = 01;        // Address of our node in Octal format
+const uint16_t target_node = 00;       // Address of the other node in Octal format
+const unsigned long interval = 2000;
+unsigned long last_sent;             // When did we last send?
+unsigned long packets_sent; 
+//byte addresses[][6] = {"1Node","2Node"};     // Radio pipe addresses for the 2 nodes to communicate.
+
+
+#define scantime 10000
 #define DISPLAYPIN 2 
 #define NUMPIXELS 8 // Popular NeoPixel ring size
 #define SourcePoint "RaiTan"
 Adafruit_NeoPixel pixels(NUMPIXELS, DISPLAYPIN, NEO_GRB);
 #define DELAYVAL 500 // Time (in milliseconds) to pause between pixels
-
 
 void neopixel(uint8_t level);
 void sendingToPumpControl(float level);
@@ -25,10 +34,11 @@ void unusedPins();
 void debugInfoSetup();
 uint8_t levelReader();
 uint8_t ledtesting(uint8_t level);
+uint8_t receiver();
 
-struct dataPak{char source[7];char target[7];char type[7];float value;};
-struct dataPak toBeSendedPak;
-struct dataPak acknowledgeData;
+struct dataPak{uint16_t this_node;uint16_t target_node;char type[7];float value;};
+dataPak toBeSendedPak;
+dataPak ReceivedPak;
 
 //struct RecvPak{char source[7];char target[7];char type[7];float value;}acknowledgeData;
 
@@ -37,92 +47,66 @@ void setup()
   unusedPins();
   Serial.begin(115200); // Open serial monitor at 115200 baud to see ping results.
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
+  SPI.begin();
+  //strncpy(toBeSendedPak.this_node,SourcePoint,7);//SourcePoint je nazov tohto pointu urceny v header pomocou #define
+  //strncpy(toBeSendedPak.target_node,"P1Cont",7);
+  strncpy(toBeSendedPak.type,"wtrlev",7);
+  float level = 10.5;  
+  toBeSendedPak.value = level;
   radiosetup();
   debugInfoSetup();
 }
 
 void loop() 
 {
-static uint8_t level;
-//level=levelReader();
-level=ledtesting(level);
-neopixel(level);
-sendingToPumpControl(level);
-
-Serial.print("50 level = ");Serial.println(level);
-//neopixel(level);
-//delay(DELAYVAL);
-delay(1000);
+  static uint8_t level;
+  static uint8_t prevlevel;
+  static uint64_t prevtime;
+  if (millis()-prevtime > scantime)
+    {
+      //level=levelReader();
+      level=ledtesting(level);
+      prevtime = millis();
+    }
+  
+  if(level!= prevlevel)
+    {
+      prevlevel = level;
+      sendingToPumpControl(level);
+      //neopixel(level);
+      Serial.print("50 level = ");
+      Serial.println(level);
+    }
+  receiver();
+   
 }
 
 void sendingToPumpControl(float level)
 { /****************** Ping Out Role ***************************/  
-  strncpy(toBeSendedPak.source,SourcePoint,7);//SourcePoint je nazov tohto pointu urceny v header pomocou #define
-  strncpy(toBeSendedPak.target,"P1Cont",7);
-  strncpy(toBeSendedPak.type,"wtrlev",7);
-//  float  level = levelReader();
-    
-  toBeSendedPak.value = level;
-
-    radio.stopListening();                                    // First, stop listening so we can talk.
-    Serial.println(F("Now sending"));
-//    toBeSendedPak._micros = micros();
-     if (!radio.write( &toBeSendedPak, sizeof(toBeSendedPak) )){
-       Serial.println(F("failed"));
-     }
-    radio.startListening();                                    // Now, continue listening
-    unsigned long started_waiting_at = micros();               // Set up a timeout period, get the current microseconds
-    boolean timeout = false;                                   // Set up a variable to indicate if a response was received or not
-
-    while ( ! radio.available() ){                             // While nothing is received
-      if (micros() - started_waiting_at > 200000 ){            // If waited longer than 200ms, indicate timeout and exit while loop
-          timeout = true;
-          break;
-      }      
-    }
-        
-    if ( timeout ){                                             // Describe the results
-        Serial.println(F("Failed, response timed out."));
-    }else{
-                                                                // Grab the response, compare, and send to debugging spew
-        radio.read( &acknowledgeData, sizeof(acknowledgeData) );
-                
-        // Spew it
-        Serial.print(F("Sent "));
-        Serial.print(toBeSendedPak.value);
-        Serial.print(F(", Got response source= "));
-        Serial.print(acknowledgeData.source);Serial.print("  ");
-//        Serial.print(F(", Round-trip delay "));
-//        Serial.print(time-toBeSendedPak._micros);
-//        Serial.print(F(" microseconds Value "));
-        Serial.print(acknowledgeData.target);Serial.print("  ");
-        Serial.print(acknowledgeData.type);Serial.print("  ");
-        Serial.println(acknowledgeData.value);Serial.print("  ");
- 
-    }
-
-    // Try again 1s later
-
+    network.update();                          // Check the network regularly
+    toBeSendedPak.value = level;
+    unsigned long now = millis();              // If it's time to send a message, send it!
+    last_sent = now;
+    Serial.print("Sending...");
+    //dataPak toBeSendedPak = { millis(), packets_sent++ };
+    RF24NetworkHeader header(/*to node*/ target_node);
+    bool ok = network.write(header,&toBeSendedPak,sizeof(toBeSendedPak));
+    if (ok)
+      Serial.println("ok.");
+    else
+      Serial.println("failed.");
 }  
 
 void radiosetup()
 {
-      /*  radiosetup   */
   radio.begin();
-
- // Set the PA Level low to prevent power supply related issues since this is a
- // getting_started sketch, and the likelihood of close proximity of the devices. RF24_PA_MAX is default.
-  radio.setPALevel(RF24_PA_LOW);
-  
+  network.begin(/*channel*/ 90, /*node address*/ this_node);
+  radio.setDataRate(RF24_250KBPS);
+  radio.setPALevel(RF24_PA_HIGH);
   // Open a writing and reading pipe on each radio, with opposite addresses
-  
-    radio.openWritingPipe(addresses[0]);
-    radio.openReadingPipe(1,addresses[1]);
-  
-  
-  toBeSendedPak.value = 1.22;
-  // Start the radio listening for data
-  radio.startListening();                    // Start listening
+    //radio.openWritingPipe(addresses[0]);
+    //radio.openReadingPipe(1,addresses[1]);
+  //radio.startListening();
 }
 
 void unusedPins()
@@ -165,23 +149,23 @@ void neopixel(uint8_t level)
 }
 
 uint8_t ledtesting(uint8_t level)
-{
-static bool direction = LOW;
+  {
+  static bool direction = LOW;
 
-if(direction == LOW && level <= 8)
-    {
-      if(level < 8)++level;
-      else direction = HIGH;
-      return level;
-    }
+  if(direction == LOW && level <= 8)
+      {
+        if(level < 8)++level;
+        else direction = HIGH;
+        return level;
+      }
 
-else if (direction == HIGH && level > 0){level=level-1;return level;}
+  else if (direction == HIGH && level > 0){level=level-1;return level;}
 
-else {direction = LOW; return 0;}
+  else {direction = LOW; return 0;}
 
-//else {direction = LOW;return level;}
+  //else {direction = LOW;return level;}
 
-//Serial.print(level);Serial.print("   ");Serial.print(direction);Serial.print("   ");Serial.println(millis());
+  //Serial.print(level);Serial.print("   ");Serial.print(direction);Serial.print("   ");Serial.println(millis());
 
 }
 
@@ -193,6 +177,26 @@ void debugInfoSetup()
   Serial.print("Failure detected" );Serial.println(radio.failureDetected);
 }
 
+uint8_t receiver()
+{   
+  
+  //radio.startListening();
+  //delay(20);
+  network.update();    
+    //byte pipeNo;              // Declare variables for the pipe
+  while ( network.available() ) {     // Is there anything ready for us?
+    
+    RF24NetworkHeader header;        // If so, grab it and print it out
+    //payload_t payload;
+    network.read(header,&ReceivedPak,sizeof(ReceivedPak));
+    Serial.print("Received packet #");
+    Serial.print(ReceivedPak.value);
+    Serial.print(" at ");
+    return ReceivedPak.value; //Serial.println(payload.ms);
+  }
+   return 99; 
+  //else{Serial.print("121 no radio available");return 99;}
+}
 /*
 void acknowledgeLoopControl(unsigned long time,unsigned long started_waiting_at)
 {
