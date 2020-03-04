@@ -12,8 +12,8 @@ RF24 radio(9,10);                            // Set up nRF24L01 radio on SPI bus
 /*** Topology ***/
 RF24Network network(radio); 
 
-const uint16_t this_node = 01;        // Address of our node in Octal format
-const uint16_t target_node = 00;       // Address of the other node in Octal format
+const uint16_t this_node = 012;        // Address of our node in Octal format
+const uint16_t target_node = 02;       // Address of the other node in Octal format
 const unsigned long interval = 2000;
 unsigned long last_sent;             // When did we last send?
 unsigned long packets_sent; 
@@ -36,7 +36,7 @@ uint8_t levelReader();
 uint8_t ledtesting(uint8_t level);
 uint8_t receiver();
 
-struct dataPak{uint16_t this_node;uint16_t target_node;char type[7];float value;};
+struct dataPak{char type[7];float value;};
 dataPak toBeSendedPak;
 dataPak ReceivedPak;
 
@@ -50,7 +50,8 @@ void setup()
   SPI.begin();
   //strncpy(toBeSendedPak.this_node,SourcePoint,7);//SourcePoint je nazov tohto pointu urceny v header pomocou #define
   //strncpy(toBeSendedPak.target_node,"P1Cont",7);
-  strncpy(toBeSendedPak.type,"wtrlev",7);
+  //strncpy(toBeSendedPak.type,"wtrlev",7);
+  
   float level = 10.5;  
   toBeSendedPak.value = level;
   radiosetup();
@@ -85,14 +86,16 @@ void sendingToPumpControl(float level)
 { /****************** Ping Out Role ***************************/  
     network.update();                          // Check the network regularly
     toBeSendedPak.value = level;
+    strncpy(toBeSendedPak.type,"wtrlev",7);
     unsigned long now = millis();              // If it's time to send a message, send it!
     last_sent = now;
     Serial.print("Sending...");
     //dataPak toBeSendedPak = { millis(), packets_sent++ };
     RF24NetworkHeader header(/*to node*/ target_node);
+    header.type=1;
     bool ok = network.write(header,&toBeSendedPak,sizeof(toBeSendedPak));
     if (ok)
-      Serial.println("ok.");
+      {Serial.println("ok.");Serial.print("sended type ");Serial.print(toBeSendedPak.type);}
     else
       Serial.println("failed.");
 }  

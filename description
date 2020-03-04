@@ -2,13 +2,18 @@ Riadenie a senzory v dome.
 
 Siet controlerov pomocou nRF24l01 s vyuzitim "pipes" a datovych balikov definovanych pomocou struct. 
 V sieti sa nachadza 7 hlavnych bodov:
+popis siete:
 
-node 01 - RaiTan - Tank na dazdovu vodu
-node 02 - P1Cont - Ovladanie solenoidov pri pumpe v pivnici
-Centra - Centrala
-....
-....
-....
+                          UZLY SIETE
 
-pipes Raitan - P1Cont: 1
-      P1Cont - Centra: 2
+node 012 - senzor hladiny dazdovej vody
+node 02 - Ovladanie solenoidov pri pumpe v pivnici
+node 00 - Centrala
+node 01 - senzor hladiny pri vyrovnavcacej nadrzi v pivnici
+
+                           TYPY SPRAV
+
+1-hladina vody v dazdovej nadrzi
+2-hladina vody vo vyrovnavacej nadrzi                           
+
+
