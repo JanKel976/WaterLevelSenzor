@@ -8,7 +8,7 @@
 #include <SPI.h>
 
 
-RF24 radio(9,10);       0,3
+RF24 radio(9,10);      // 0,3
                      // Set up nRF24L01 radio on SPI bus plus pins 7 & 8
 /*** Topology ***/
 RF24Network network(radio); 
@@ -17,23 +17,26 @@ const uint16_t this_node = 012;        // Address of our node in Octal format
 const uint16_t to_node = 02;       // Address of the other node in Octal format
 const unsigned long interval = 2000;
 
-#define scantime 1000
+#define scantime 15000 //ako casto sa ma zistovat hladina
 #define DISPLAYPIN 2 
 #define NUMPIXELS 8 // Popular NeoPixel ring size
-#define SourcePoint "RaiTan"
+#define SourcePoint "RaiTan"  //Rainwater Tank
+
 Adafruit_NeoPixel pixels(NUMPIXELS, DISPLAYPIN, NEO_GRB);
 #define DELAYVAL 500 // Time (in milliseconds) to pause between pixels
 
 void neopixel(uint8_t level);
-void sendingToPumpControl(float level);
+void sendingToPumpControl(byte level);
 void radiosetup();
 void pinSettings();
 void debugInfoSetup();
 uint8_t levelReader();\
 uint8_t ledtesting(uint8_t level);
 void receiver();
+int inputReader(byte i);
 
-struct dataPak{float value1;float value2;};
+
+struct dataPak{byte value1;float value2;};
 dataPak toBeSendedPak;
 dataPak ReceivedPak;
 bool debugger;
@@ -45,10 +48,13 @@ void setup()
   Serial.begin(115200); // Open serial monitor at 115200 baud to see ping results.
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
   SPI.begin();
-  float level = 0;  
-  toBeSendedPak.value1 = level;
+  toBeSendedPak.value1 = 0;
+  pixels.setPixelColor(7, pixels.Color(20, 0, 0)); //indikator zapnutia controlera
+  pixels.show();
   radiosetup();
   debugInfoSetup();
+  levelReader();
+  
 }
 
 void loop() 
@@ -56,29 +62,27 @@ void loop()
   static uint8_t level;
   static uint8_t prevlevel;
   static uint64_t prevtime;
+
   if (millis()-prevtime > scantime)
     {
-      if(debugger == 0)level=levelReader();
-      else level = ledtesting(level);
-      Serial.print("line 69 level = ");Serial.println(level);
+      level=levelReader();
+      if(debugger ==1){Serial.print("line 65 level = ");Serial.println(level);}
       prevtime = millis();
     }
-  
+  Serial.println("line 72 level = ");Serial.println(level);
   if(level!= prevlevel)
     {
+      neopixel(level);
+      //sendingToPumpControl(level);
+      Serial.println("line 73 levelchange ");
       prevlevel = level;
-      sendingToPumpControl(level);
-   
-
-  Serial.println("levelchange ");
-      
-      
     }
-    neopixel(level);
+ 
+  delay(500);
   //receiver();
 }
 
-void sendingToPumpControl(float level)
+void sendingToPumpControl(byte level)
 { /****************** Ping Out Role ***************************/  
     network.update();                          // Check the network regularly
     toBeSendedPak.value1 = level;
@@ -103,39 +107,79 @@ void radiosetup()
 
 void pinSettings()
 {
-  pinMode (0, INPUT_PULLUP);
-  pinMode (1, INPUT_PULLUP);
-  pinMode (3, INPUT_PULLUP);
-  pinMode (4, INPUT_PULLUP);
-  pinMode (5, INPUT_PULLUP);
-  pinMode (6, INPUT_PULLUP);  // reserve output
-  pinMode(9,INPUT);
-  pinMode(10,INPUT);
-  pinMode(11,INPUT);
+  pinMode (0, INPUT_PULLUP);//D0
+  pinMode (1, INPUT_PULLUP);//D1
+  pinMode (DISPLAYPIN,OUTPUT); //D2
+  pinMode (3,INPUT); //D3
+  pinMode (4, INPUT);
+  pinMode (5, INPUT);
+  pinMode (6, INPUT);  // reserve output
+  pinMode(A0,INPUT); //A0
+  pinMode(A1,INPUT); //A1
+  pinMode(A2,INPUT);  //...
+  pinMode(A3,INPUT);
+  pinMode(A4,INPUT);
+  pinMode(A5,INPUT);
+  pinMode(A6,INPUT);
+  pinMode(A7,INPUT); //A7
+  //pinMode(10,INPUT);
+  //pinMode(11,INPUT);
 }
 
 uint8_t levelReader()
-{
-  uint8_t level = 0;
-  //Serial.print("line 125 level = ");Serial.println(level);
-  if (analogRead(A0)> 950){level = 0;}
-  if (analogRead(A0)<=950){level = 1;}
-  if (analogRead(A1)<=950){level = 2;}
-  if (analogRead(A2)<=950){level = 3;}
-  if (analogRead(A3)<=950){level = 4;}
-  if (analogRead(A4)<=950){level = 5;}
-  if (analogRead(A5)<=950){level = 6;}
-  if (analogRead(A6)<=950){level = 7;}
-  if (analogRead(A7)<=950){level = 8;}
+{int volts;
+  static uint8_t level = 0;
 
-  Serial.print("analogRead(A0)= ");Serial.println(analogRead(A0));
-  Serial.print("analogRead(A1)= ");Serial.println(analogRead(A1));
-  Serial.print("analogRead(A2)= ");Serial.println(analogRead(A2));
-  Serial.print("analogRead(A3)= ");Serial.println(analogRead(A3));
-  Serial.print("analogRead(A4)= ");Serial.println(analogRead(A4));
-  Serial.print("analogRead(A5)= ");Serial.println(analogRead(A5));
-  Serial.print("analogRead(A6)= ");Serial.println(analogRead(A6));
-  Serial.print("analogRead(A7)= ");Serial.println(analogRead(A7));
+  pixels.setPixelColor(6, pixels.Color(0, 0, 20));
+  pixels.show();
+  //digitalWrite(relePin,HIGH);//zapni rele privodu napatia do sondy
+  for(int i=14;i<=19;i++){
+     volts=inputReader(i);
+     if(volts<=850){level=i-14;break;}
+     Serial.print(i);Serial.print("  line 139 volts = ");Serial.println(volts);
+  }
+ //digitalWrite(relePin,LOW); //vypni rele privodu napatia do sondy
+ // if(level<=7){level=level+1;delay(500);}
+ // else level =0;
+  pixels.setPixelColor(6, pixels.Color(0, 0, 0));
+  pixels.show();
+  return level;
+
+
+
+  //Serial.print("line 125 level = ");Serial.println(level);
+  /*      
+  
+  uint16_t pin0,pin1,pin2,pin3,pin4,pin5,pin6,pin7;
+  pin0=analogRead(A0);delay(100);
+  pin1=analogRead(A1);delay(100);
+  pin2=analogRead(A2);delay(100);
+  pin3=analogRead(A3);delay(100);
+  pin4=analogRead(A4);delay(100);
+  pin5=analogRead(A5);delay(100);
+  pin6=analogRead(A6);delay(100);
+  pin7=analogRead(A7);delay(100);
+
+  if (pin0 > 950){level = 0;delay(2);Serial.print(" pin0= ");Serial.println(pin0);}
+  if (pin0<=950){level = 1;delay(2);Serial.print(" pin0= ");Serial.println(pin0);}
+  if (pin1<=950){level = 2;delay(2);Serial.print(" pin1= ");Serial.println(pin1);}
+  if (pin2<=950){level = 3;delay(2);Serial.print(" pin2= ");Serial.println(pin2);}
+  if (pin3<=950){level = 4;delay(2);Serial.print(" pin3= ");Serial.println(pin3);}
+  if (pin4<=950){level = 5;delay(2);Serial.print(" pin4= ");Serial.println(pin4);}
+  if (pin5<=950){level = 6;delay(2);Serial.print(" pin5= ");Serial.println(pin5);}
+  if (pin6<=950){level = 7;delay(2);Serial.print(" pin6= ");Serial.println(pin6);}
+  if (pin7<=950){level = 8;delay(2);Serial.print(" pin7= ");Serial.println(pin7);}
+  
+  
+
+  
+  Serial.print("analogRead(A1)= ");Serial.println(analogRead(A1));delay(500);
+  Serial.print("analogRead(A2)= ");Serial.println(analogRead(A2));delay(500);
+  Serial.print("analogRead(A3)= ");Serial.println(analogRead(A3));delay(500);
+  Serial.print("analogRead(A4)= ");Serial.println(analogRead(A4));delay(500);
+  Serial.print("analogRead(A5)= ");Serial.println(analogRead(A5));delay(500);
+  Serial.print("analogRead(A6)= ");Serial.println(analogRead(A6));delay(500);
+  Serial.print("analogRead(A7)= ");Serial.println(analogRead(A7));delay(500);
 
   //Serial.print("  line 134 analogread2 = ");Serial.print(analogRead(A2));Serial.print("  ");
   //Serial.print("  line 134 level = ");Serial.println(level);
@@ -147,16 +191,14 @@ uint8_t levelReader()
   //Serial.print("line 138 level = ");Serial.println(level);
   //Serial.print(b);Serial.print(c);Serial.print("  ");
   //uint8_t level = a*4+b*2+c;
-  
-  return level;
+ */ 
+
 }
 
 void neopixel(uint8_t level)
 { 
   pixels.clear(); // Set all pixel colors to 'off'
   
-  
-
   if (level == 0)
     { static uint32_t prevtimelong;
       //Serial.print("line 142 neopixel loop level = 0 ");
@@ -175,17 +217,22 @@ void neopixel(uint8_t level)
 
     }
   else{
-      for(int i=0; i<level; i++) 
+      for(int i=0; i<=level; i++) 
         { // For each pixel...
           //if (level == 0)pixels.setPixelColor(i, pixels.Color(0, 0, 0));
           //if (level > 0)pixels.setPixelColor(i, pixels.Color(0, 20, 0));
-          pixels.setPixelColor(i, pixels.Color(0, 20, 0));
+          pixels.setPixelColor(i+2, pixels.Color(0, 20, 0));
           //pixels.show();
           //delay(DELAYVAL);
         }
       }
 pixels.show();
 }
+
+
+
+
+
 
 uint8_t ledtesting(uint8_t level)
   {
@@ -227,5 +274,14 @@ void receiver()
       Serial.print(ReceivedPak.value1);
       Serial.print(" at ");
     }
+}
+
+int inputReader(byte i){
+int pinValue;
+pinMode(i,INPUT_PULLUP);
+delay(1);
+pinValue=analogRead(i);
+pinMode(i,INPUT);
+return pinValue;
 }
 
