@@ -17,7 +17,7 @@ const uint16_t this_node = 012;        // Address of our node in Octal format
 const uint16_t to_node = 02;       // Address of the other node in Octal format
 const unsigned long interval = 2000;
 
-#define scantime 60000 //ako casto sa ma zistovat hladina
+#define SCANTIME 60000 //ako casto sa ma zistovat hladina
 #define DISPLAYPIN 2 
 #define RELEPIN 3
 #define NUMPIXELS 8 // Popular NeoPixel ring size
@@ -61,7 +61,7 @@ void loop()
   static uint64_t prevtime;
   static bool scanflag;
  
-  if (millis()-prevtime > scantime)  //hladina vody sa scanuje v case scantime
+  if (millis()-prevtime > SCANTIME)  //hladina vody sa scanuje v case SCANTIME
     {
       level=levelReader();
       scanflag=HIGH;           //oznamenie scanovania
@@ -133,16 +133,48 @@ uint8_t levelReader()
 {int volts;
   static uint8_t _level = 0;
   
-  for(int i=21;i>=14;i--){
-     volts=inputReader(i);
-     if(volts<=850){_level=i-13;
-     if(debugger ==1){Serial.print(i);Serial.print("  line 139 volts = ");Serial.print(volts);}
-     break;
-     }
-     else _level=0;
-  }
+if(debugger ==1){Serial.print("  line 136 _level ");Serial.print(_level);}
 
+  for(int i=21;i>=14;i--){
+    if(debugger ==1){Serial.print(" , i = ");Serial.print(i);}
+     /* pre ochranu rele citaj hodnoty pinov 21 a 20 len ak je ndrz napustena aspon do urvne 6 alebo 7 ****/  
+     if(i==21 && _level ==7){
+       volts=inputReader(i);
+      if(volts<=850){_level=i-13;break;}
+     }
+
+     if(i==20 && _level ==6){
+       volts=inputReader(i);
+      if(volts<=850){_level=i-13;break;}
+     }
+     
+     if(i<20 && i>=14){ 
+     volts=inputReader(i);
+     if(volts<=850){_level=i-13;break;}
+     else _level=0;
+     }
+  }
+if(debugger ==1){Serial.print(" , line 159 volts = ");Serial.println(volts);}
   return _level;
+}
+
+int inputReader(byte pin){
+    int pinValue;
+    if(debugger==1){Serial.print(" 242 pin ");Serial.print(pin);}
+    if(pin==21||pin==20){digitalWrite(RELEPIN,HIGH);
+      delay(20);
+      pinValue=analogRead(pin);
+      digitalWrite(RELEPIN,LOW);delay(200);
+      }
+    else{pinMode(pin,INPUT_PULLUP);
+      delay(1);
+      pinValue=analogRead(pin);
+      pinMode(pin,INPUT);
+      }
+    if(debugger ==1){Serial.print("  177  pinValue = ");Serial.println(pinValue);}
+    
+    //level=0;
+    return pinValue;
 }
 
 void neopixel(uint8_t level)
@@ -171,23 +203,6 @@ void receiver()
     }
 }
 
-int inputReader(byte pin){
-    int pinValue;
-    Serial.print(" 242 pin ");Serial.print(pin);
-    if(pin==21||pin==20){digitalWrite(RELEPIN,HIGH);
-      delay(20);
-      pinValue=analogRead(pin);
-      digitalWrite(RELEPIN,LOW);delay(200);
-      }
-    else{pinMode(pin,INPUT_PULLUP);
-      delay(1);
-      pinValue=analogRead(pin);
-      pinMode(pin,INPUT);
-      }
-    if(debugger ==0){Serial.print("  295  pinValue = ");Serial.println(pinValue);}
-    return pinValue;
-}
-
 void signals(bool scanflag,byte _level){static uint32_t prevtimelong;
       
   if (millis() - prevtimelong < 1000)
@@ -203,6 +218,7 @@ void signals(bool scanflag,byte _level){static uint32_t prevtimelong;
   else prevtimelong = millis();
   pixels.show();
   }
+/***************** for debugging  ******************/
 
 uint8_t ledtesting(uint8_t level)
   {
@@ -223,7 +239,7 @@ uint8_t ledtesting(uint8_t level)
 
   //if(debugger ==1){Serial.print(level);Serial.print("   ");
   //Serial.print(direction);Serial.print("   ");Serial.println(millis());
-  }
+  //}
 }
 
 void debugInfoSetup()
