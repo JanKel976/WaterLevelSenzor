@@ -6,6 +6,7 @@
 #include <RF24Network.h>
 #include <printf.h>
 #include <SPI.h>
+#define SourcePoint "RaiTan"
 
 /******* Set up nRF24L01 radio on SPI bus plus pins 7 & 8 *************/
 RF24 radio(9,10);      // 0,3
@@ -13,9 +14,9 @@ RF24 radio(9,10);      // 0,3
 /*********** Topology of network ************************/
 RF24Network network(radio); 
 
-const uint16_t this_node = 012;        // Address of our node in Octal format
-const uint16_t to_node = 02;       // Address of the other node in Octal format
-const unsigned long interval = 2000;
+const uint16_t this_node = 01;        // Address of our node in Octal format
+const uint16_t other_node = 00;       // Address of the other node in Octal format
+
 
 #define SCANTIME 60000 //ako casto sa ma zistovat hladina
 #define DISPLAYPIN 2 
@@ -36,8 +37,12 @@ uint8_t ledtesting(uint8_t level);
 void receiver();
 int inputReader(byte i);
 void signals(bool scanflag,byte _level);
+void dataSendTest();
 
-struct dataPak{byte value1;float value2;};
+unsigned long last_sent;             // When did we last send?
+unsigned long packets_sent; 
+struct dataPak{byte level;float reserved;};
+//struct dataPak{byte value1;float value2;};
 dataPak toBeSendedPak;
 dataPak ReceivedPak;
 bool debugger;
@@ -47,10 +52,8 @@ void setup(){
   debugger = 0;
   Serial.begin(115200); // Open serial monitor at 115200 baud to see ping results.
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
-  SPI.begin();
-  toBeSendedPak.value1 = 0; //value1 = level, value2 = rezervovane 
   radiosetup();
-  debugInfoSetup();
+  //debugInfoSetup();
   levelReader();
 }
 
@@ -60,12 +63,13 @@ void loop()
   static uint8_t prevlevel;
   static uint64_t prevtime;
   static bool scanflag;
- 
+  
   if (millis()-prevtime > SCANTIME)  //hladina vody sa scanuje v case SCANTIME
     {
       level=levelReader();
       scanflag=HIGH;           //oznamenie scanovania
       prevtime = millis();     //vynulovanie casu
+     // dataSendTest();
       sendingToPumpControl(level); //odoslanie do kontrolera pumpy
     }
 
@@ -81,30 +85,35 @@ signals(scanflag,level);  //signaly funkcii (pre scanovanie modra farba,pre kont
 
 if(millis()-prevtime > 2000)scanflag = LOW; // vypnutie oznamenia scanovania
   delay(500);
-  receiver();  // prepnutie do modu prijimania
+  //receiver();  // prepnutie do modu prijimania
 }
 
 void sendingToPumpControl(byte level)
 { /****************** Ping Out Role ***************************/  
     network.update();                          // Check the network regularly
-    toBeSendedPak.value1 = level;
+    toBeSendedPak.level = level;
+    toBeSendedPak.reserved = radio.isPVariant();
     if(debugger == 1){Serial.print("Sending...");}
-    RF24NetworkHeader header(/*to node*/ to_node);
+    RF24NetworkHeader header(/*to node*/ other_node);
     //Serial.print("95 target node  ");Serial.println(header.to_node);
-    header.type=1;
+   // header.type=1;
     bool ok = network.write(header,&toBeSendedPak,sizeof(toBeSendedPak));
-    if (ok && debugger == 1)
+    if (ok && debugger == 0)
       {Serial.println("ok.");}
     else
-      if(debugger == 1){Serial.println("failed.");}
+      if(debugger == 0){Serial.println("failed.");}
 }  
 
 void radiosetup()
-{
+{ SPI.begin();
   radio.begin();
-  network.begin(/*channel*/ 90, /*node address*/ this_node);
-  radio.setDataRate(RF24_250KBPS);
+  //radio.setDataRate(RF24_250KBPS);
   radio.setPALevel(RF24_PA_HIGH);
+  network.begin(/*channel*/ 90, /*node address*/ this_node);
+  //strncpy(toBeSendedPak.source,SourcePoint,7);//SourcePoint je nazov tohto pointu urceny v header pomocou #define
+  //strncpy(toBeSendedPak.target,"P1Cont",7);
+  //strncpy(toBeSendedPak.type,"wtrlev",7);
+  //toBeSendedPak.level = level;
 }
 
 void pinSettings()
@@ -198,7 +207,7 @@ void receiver()
       network.read(header,&ReceivedPak,sizeof(ReceivedPak));
      if(debugger ==1){
       Serial.print("Received packet #");
-      Serial.print(ReceivedPak.value1);
+      Serial.print(ReceivedPak.reserved);
       Serial.print(" at ");}
     }
 }
@@ -251,3 +260,15 @@ void debugInfoSetup()
   Serial.print("Failure detected" );Serial.println(radio.failureDetected);}
 }
 
+void dataSendTest(){
+    network.update();
+    toBeSendedPak.level = 22;
+    Serial.print("  108 Sending...");Serial.print(toBeSendedPak.level);
+    
+    RF24NetworkHeader header(/*to node*/ other_node);
+    bool ok = network.write(header,&toBeSendedPak,sizeof(toBeSendedPak));
+    if (ok)
+      Serial.println("  ok.");
+    else
+      Serial.println("failed.");
+}
