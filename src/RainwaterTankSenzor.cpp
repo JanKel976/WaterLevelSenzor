@@ -1,63 +1,101 @@
-
 #include "nRF24L01.h"
 #include <Adafruit_NeoPixel.h>
 #include <RF24.h>
-#include <RF24Network.h>
 #include <SPI.h>
 #include <arduino.h>
 #include <printf.h>
-#define SourcePoint "RaiTan"
+
+// Node type definitions (must match DeviceType enum in GatewayMain.cpp)
+enum DeviceType : uint8_t {
+  DEVICE_GATEWAY = 0,
+  DEVICE_RAINTANK = 1,
+  DEVICE_SWITCHBOX = 2,
+  DEVICE_SOUTHGARDEN = 3,
+  DEVICE_WESTGARDEN = 4,
+  DEVICE_PUMPROOM = 5
+};
+
+// Define this node's type
+#define THIS_NODE DEVICE_RAINTANK
 
 /******* Set up nRF24L01 radio on SPI bus plus pins 7 & 8 *************/
 RF24 radio(9, 10); // 0,3
 
-/*********** Topology of network ************************/
-RF24Network network(radio);
+// Define the addresses for all nodes in the network
+// Using 6-character addresses for each node
+const byte nodeAddresses[][6] = {
+    "GATEW", // Gateway
+    "RAITN", // Rain Tank
+    "SWTCH", // Switchbox
+    "SGRDN", // South Garden
+    "WGRDN", // West Garden
+    "PUMPR"  // Pump Room
+};
 
-const uint16_t this_node = 01;  // Address of our node in Octal format
-const uint16_t other_node = 00; // Address of the other node in Octal format
+// Define node names for debugging and display
+const char *nodeNames[] = {"gateway",     "rain tank",  "switchbox",
+                           "southgarden", "westgarden", "pump room"};
 
 #define SCANTIME 60000 // ako casto sa ma zistovat hladina
 #define DISPLAYPIN 2
 #define RELEPIN 3
-#define NUMPIXELS 8          // Popular NeoPixel ring size
-#define SourcePoint "RaiTan" // Rainwater Tank
+#define NUMPIXELS 8 // Popular NeoPixel ring size
 
 Adafruit_NeoPixel pixels(NUMPIXELS, DISPLAYPIN, NEO_GRB);
 #define DELAYVAL 500 // Time (in milliseconds) to pause between pixels
 
+// USING THE EXACT PACKET STRUCTURE FROM GATEWAYMAIN.CPP
+// But with clearer field names for this specific node
+struct __attribute__((packed)) dataStruct {
+  DeviceType deviceType; // 1 byte - identifies the sending device
+  uint16_t waterLevel;   // For rain tank, this stores water level (using
+                         // temperature field)
+  uint16_t unused1;      // Unused in rain tank (humidity field in gateway)
+  uint16_t unused2;      // Unused in rain tank (timeParam1 field in gateway)
+  uint16_t unused3;      // Unused in rain tank (timeParam2 field in gateway)
+  uint16_t timeStamp;    // Seconds since boot
+  uint16_t unused4;      // Unused in rain tank (co2Level field in gateway)
+  uint8_t status;        // Status flags
+};
+
+// Function declarations
 void neopixel(uint8_t level);
-void sendingToPumpControl(byte level);
+void sendDataToGateway(uint8_t level);
 void radiosetup();
 void pinSettings();
 void debugInfoSetup();
 uint8_t levelReader();
-uint8_t ledtesting(uint8_t level);
 void receiver();
 int inputReader(byte i);
 void signals(bool scanflag, byte _level);
 void dataSendTest();
 
-unsigned long last_sent; // When did we last send?
-unsigned long packets_sent;
-struct dataPak {
-  byte level;
-  float reserved;
-};
-// struct dataPak{byte value1;float value2;};
-dataPak toBeSendedPak;
-dataPak ReceivedPak;
-bool debugger;
+// Global variables
+dataStruct outgoingData;
+dataStruct incomingData;
+bool debugger = 0;
 
 void setup() {
   pinSettings();
-  debugger = 0;
-  Serial.begin(
-      115200);    // Open serial monitor at 115200 baud to see ping results.
+  Serial.begin(115200);
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
+
+  // Initialize the data structure
+  outgoingData.deviceType = THIS_NODE;
+  outgoingData.waterLevel = 0; // Will store water level
+  outgoingData.unused1 = 0;    // Not used
+  outgoingData.unused2 = 0;    // Not used
+  outgoingData.unused3 = 0;    // Not used
+  outgoingData.timeStamp = 0;  // Will be set when sending
+  outgoingData.unused4 = 0;    // Not used
+  outgoingData.status = 0;     // No status flags set initially
+
   radiosetup();
-  // debugInfoSetup();
-  levelReader();
+
+  // Initial level reading
+  uint8_t initialLevel = levelReader();
+  outgoingData.waterLevel = initialLevel; // Store water level
+  neopixel(initialLevel);
 }
 
 void loop() {
@@ -69,45 +107,61 @@ void loop() {
   if (millis() - prevtime > SCANTIME) // hladina vody sa scanuje v case SCANTIME
   {
     level = levelReader();
+    outgoingData.waterLevel = level;          // Store water level
+    outgoingData.timeStamp = millis() / 1000; // Seconds since boot
+
     scanflag = HIGH;     // oznamenie scanovania
     prevtime = millis(); // vynulovanie casu
-    // dataSendTest();
-    sendingToPumpControl(level); // odoslanie do kontrolera pumpy
-  }
 
-  // if(debugger ==0){Serial.print("line 73 level = ");Serial.println(level);}
-  // //pre debugging
+    // Send data to gateway
+    sendDataToGateway(level);
+  }
 
   if (level != prevlevel) // pri zmene levelu sa zobrazi zmena
   {
     neopixel(level);
-    // if(debugger ==1)Serial.println("line 78 levelchange "); //pre debugging
     prevlevel = level; // nastavenie noveho levelu
   }
+
   signals(scanflag, level); // signaly funkcii (pre scanovanie modra farba,pre
                             // kontrolu loopu blikanie)
 
   if (millis() - prevtime > 2000)
     scanflag = LOW; // vypnutie oznamenia scanovania
+
+  // Check for incoming messages
+  receiver();
+
   delay(500);
-  // receiver();  // prepnutie do modu prijimania
 }
 
-void sendingToPumpControl(
-    byte level) { /****************** Ping Out Role ***************************/
-  network.update(); // Check the network regularly
-  toBeSendedPak.level = level;
-  toBeSendedPak.reserved = radio.isPVariant();
-  if (debugger == 1) { Serial.print("Sending..."); }
-  RF24NetworkHeader header(/*to node*/ other_node);
-  // Serial.print("95 target node  ");Serial.println(header.to_node);
-  // header.type=1;
-  bool ok = network.write(header, &toBeSendedPak, sizeof(toBeSendedPak));
-  if (ok && debugger == 0) {
-    Serial.println("ok.");
-  } else if (debugger == 0) {
-    Serial.println("failed.");
+void sendDataToGateway(uint8_t level) {
+  // Stop listening to prepare for sending
+  radio.stopListening();
+
+  // Update timestamp before sending
+  outgoingData.timeStamp = millis() / 1000;
+
+  if (debugger == 0) {
+    Serial.print("Sending data from ");
+    Serial.print(nodeNames[THIS_NODE]);
+    Serial.print(" to ");
+    Serial.print(nodeNames[DEVICE_GATEWAY]);
+    Serial.print(", water level: ");
+    Serial.println(level);
   }
+
+  // Send data directly to gateway
+  bool ok = radio.write(&outgoingData, sizeof(outgoingData));
+
+  if (ok && debugger == 0) {
+    Serial.println("Transmission successful.");
+  } else if (debugger == 0) {
+    Serial.println("Transmission failed.");
+  }
+
+  // Resume listening
+  radio.startListening();
 }
 
 void radiosetup() {
@@ -115,12 +169,30 @@ void radiosetup() {
   radio.begin();
   radio.setDataRate(RF24_250KBPS);
   radio.setPALevel(RF24_PA_HIGH);
-  network.begin(/*channel*/ 90, /*node address*/ this_node);
-  // strncpy(toBeSendedPak.source,SourcePoint,7);//SourcePoint je nazov tohto
-  // pointu urceny v header pomocou #define
-  // strncpy(toBeSendedPak.target,"P1Cont",7);
-  // strncpy(toBeSendedPak.type,"wtrlev",7);
-  // toBeSendedPak.level = level;
+  radio.setChannel(74);
+
+  // Enable auto-acknowledgment for reliability
+  radio.setAutoAck(true);
+
+  // Set retry delay and count
+  radio.setRetries(5, 15);
+
+  // Configure addresses - write to gateway, listen on this node's address
+  radio.openWritingPipe(
+      nodeAddresses[DEVICE_GATEWAY]);                 // Always send to gateway
+  radio.openReadingPipe(1, nodeAddresses[THIS_NODE]); // Listen on our address
+
+  // Start in listening mode
+  radio.startListening();
+
+  if (debugger == 0) {
+    Serial.println("Radio initialized");
+    Serial.print("Node type: ");
+    Serial.print(THIS_NODE);
+    Serial.print(" (");
+    Serial.print(nodeNames[THIS_NODE]);
+    Serial.println(")");
+  }
 }
 
 void pinSettings() {
@@ -215,7 +287,6 @@ int inputReader(byte pin) {
     Serial.println(pinValue);
   }
 
-  // level=0;
   return pinValue;
 }
 
@@ -230,14 +301,45 @@ void neopixel(uint8_t level) {
 }
 
 void receiver() {
-  network.update();
-  while (network.available()) { // Is there anything ready for us?
-    RF24NetworkHeader header;   // If so, grab it and print it out
-    network.read(header, &ReceivedPak, sizeof(ReceivedPak));
-    if (debugger == 1) {
-      Serial.print("Received packet #");
-      Serial.print(ReceivedPak.reserved);
-      Serial.print(" at ");
+  // Check if there is data available
+  if (radio.available()) {
+    // Read the incoming data
+    radio.read(&incomingData, sizeof(incomingData));
+
+    if (debugger == 0) {
+      Serial.print("Received packet from node: ");
+      Serial.print(incomingData.deviceType);
+      if (incomingData.deviceType < 6) {
+        Serial.print(" (");
+        Serial.print(nodeNames[incomingData.deviceType]);
+        Serial.println(")");
+      } else {
+        Serial.println(" (unknown)");
+      }
+
+      Serial.print("Status: ");
+      Serial.println(incomingData.status);
+    }
+
+    // Process commands if this message is from the gateway
+    if (incomingData.deviceType == DEVICE_GATEWAY) {
+      // Handle commands based on status field
+      switch (incomingData.status) {
+      case 1: // Example: Reset device
+        // Implement reset logic
+        break;
+
+      case 2: // Example: Change reporting interval
+        // Could use waterLevel field to store new interval
+        // SCANTIME = incomingData.waterLevel;
+        break;
+
+        // Add more commands as needed
+
+      default:
+        // Unknown command
+        break;
+      }
     }
   }
 }
@@ -260,57 +362,37 @@ void signals(bool scanflag, byte _level) {
     prevtimelong = millis();
   pixels.show();
 }
-/***************** for debugging  ******************/
 
-uint8_t ledtesting(uint8_t level) {
-  static bool direction = LOW;
+void dataSendTest() {
+  radio.stopListening();
 
-  if (direction == LOW && level <= 8) {
-    if (level < 8)
-      ++level;
-    else
-      direction = HIGH;
-    return level;
-  }
+  outgoingData.deviceType = THIS_NODE;
+  outgoingData.waterLevel = 22; // Test water level
+  outgoingData.timeStamp = millis() / 1000;
 
-  else if (direction == HIGH && level > 0) {
-    level = level - 1;
-    return level;
-  }
+  Serial.print("Test sending from ");
+  Serial.print(nodeNames[THIS_NODE]);
+  Serial.print(" to ");
+  Serial.print(nodeNames[DEVICE_GATEWAY]);
+  Serial.print(", water level: ");
+  Serial.println(outgoingData.waterLevel);
 
-  else {
-    direction = LOW;
-    return 0;
-  }
+  bool ok = radio.write(&outgoingData, sizeof(outgoingData));
+  if (ok)
+    Serial.println("Test transmission successful.");
+  else
+    Serial.println("Test transmission failed.");
 
-  // else {direction = LOW;return level;}
-
-  // if(debugger ==1){Serial.print(level);Serial.print("   ");
-  // Serial.print(direction);Serial.print("   ");Serial.println(millis());
-  // }
+  radio.startListening();
 }
 
 void debugInfoSetup() {
   printf_begin();
   radio.printDetails();
   if (debugger == 1) {
-    Serial.print("Is chip connected");
+    Serial.print("Is chip connected: ");
     Serial.println(radio.isChipConnected());
-    Serial.print("Failure detected");
+    Serial.print("Failure detected: ");
     Serial.println(radio.failureDetected);
   }
-}
-
-void dataSendTest() {
-  network.update();
-  toBeSendedPak.level = 22;
-  Serial.print("  108 Sending...");
-  Serial.print(toBeSendedPak.level);
-
-  RF24NetworkHeader header(/*to node*/ other_node);
-  bool ok = network.write(header, &toBeSendedPak, sizeof(toBeSendedPak));
-  if (ok)
-    Serial.println("  ok.");
-  else
-    Serial.println("failed.");
 }
