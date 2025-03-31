@@ -1,25 +1,24 @@
 #include "nRF24L01.h"
 #include <Adafruit_NeoPixel.h>
+#include <Arduino.h>
 #include <RF24.h>
 #include <SPI.h>
-#include <arduino.h>
 #include <printf.h>
 
 // Node type definitions (must match DeviceType enum in GatewayMain.cpp)
 enum DeviceType : uint8_t {
-  DEVICE_GATEWAY = 0,
-  DEVICE_RAINTANK = 1,
-  DEVICE_SWITCHBOX = 2,
-  DEVICE_SOUTHGARDEN = 3,
-  DEVICE_WESTGARDEN = 4,
-  DEVICE_PUMPROOM = 5
+  DEVICE_MUSHROOM,
+  DEVICE_GREENHOUSE,
+  DEVICE_DESTILA,
+  DEVICE_TANKDATA, // Changed from DEVICE_DRYROOM to DEVICE_TANKDATA
+  DEVICE_STORAGE,
+  DEVICE_LABORATORY,
+  DEVICE_GROWROOM,
+  DEVICE_CHAMBER
 };
 
-// Define this node's type
-#define THIS_NODE DEVICE_RAINTANK
-
 /******* Set up nRF24L01 radio on SPI bus plus pins 7 & 8 *************/
-RF24 radio(9, 10); // 0,3
+RF24 radio(9, 10); //
 
 // Define the addresses for all nodes in the network
 // Using 6-character addresses for each node
@@ -32,11 +31,22 @@ const byte nodeAddresses[][6] = {
     "PUMPR"  // Pump Room
 };
 
+// Node type definitions (separate from device types)
+
+// Define this node's type
+const byte GATEWAY_ADDRESS[6] = "GATEW";
+const byte RAINTANK_ADDRESS[6] = "RAITN";
+
+// Define this node's device type (what kind of data it reports)
+#define THIS_DEVICE DEVICE_TANKDATA
+#define THIS_NODE 1    // This node's ID in the network (0 for gateway)
+#define NODE_GATEWAY 0 // Gateway node ID
+
 // Define node names for debugging and display
 const char *nodeNames[] = {"gateway",     "rain tank",  "switchbox",
                            "southgarden", "westgarden", "pump room"};
 
-#define SCANTIME 60000 // ako casto sa ma zistovat hladina
+#define SCANTIME 15000 // ako casto sa ma zistovat hladina
 #define DISPLAYPIN 2
 #define RELEPIN 3
 #define NUMPIXELS 8 // Popular NeoPixel ring size
@@ -81,7 +91,8 @@ void setup() {
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
 
   // Initialize the data structure
-  outgoingData.deviceType = THIS_NODE;
+  outgoingData.deviceType =
+      THIS_DEVICE;             // Changed from THIS_NODE to THIS_DEVICE
   outgoingData.waterLevel = 0; // Will store water level
   outgoingData.unused1 = 0;    // Not used
   outgoingData.unused2 = 0;    // Not used
@@ -96,6 +107,9 @@ void setup() {
   uint8_t initialLevel = levelReader();
   outgoingData.waterLevel = initialLevel; // Store water level
   neopixel(initialLevel);
+
+  // Send initial data to gateway
+  sendDataToGateway(initialLevel);
 }
 
 void loop() {
@@ -104,8 +118,8 @@ void loop() {
   static uint64_t prevtime;
   static bool scanflag;
 
-  if (millis() - prevtime > SCANTIME) // hladina vody sa scanuje v case SCANTIME
-  {
+  // Periodically read water level and send data to gateway
+  if (millis() - prevtime > SCANTIME) {
     level = levelReader();
     outgoingData.waterLevel = level;          // Store water level
     outgoingData.timeStamp = millis() / 1000; // Seconds since boot
@@ -113,24 +127,28 @@ void loop() {
     scanflag = HIGH;     // oznamenie scanovania
     prevtime = millis(); // vynulovanie casu
 
-    // Send data to gateway
+    // Send data to gateway and receive any commands in the ACK payload
     sendDataToGateway(level);
+    // dataSendTest();
+    //  After sending, we can go to sleep or low power mode
+    //  enterLowPowerMode(); // Uncomment if implementing sleep mode
   }
 
-  if (level != prevlevel) // pri zmene levelu sa zobrazi zmena
-  {
+  // Update display if level changed
+  if (level != prevlevel) {
     neopixel(level);
     prevlevel = level; // nastavenie noveho levelu
   }
 
-  signals(scanflag, level); // signaly funkcii (pre scanovanie modra farba,pre
-                            // kontrolu loopu blikanie)
+  // Visual indicators
+  signals(scanflag, level);
 
+  // Reset scan flag after 2 seconds
   if (millis() - prevtime > 2000)
     scanflag = LOW; // vypnutie oznamenia scanovania
 
-  // Check for incoming messages
-  receiver();
+  // No longer need to check for incoming commands here
+  // receiver(); // Remove this line
 
   delay(500);
 }
@@ -146,53 +164,105 @@ void sendDataToGateway(uint8_t level) {
     Serial.print("Sending data from ");
     Serial.print(nodeNames[THIS_NODE]);
     Serial.print(" to ");
-    Serial.print(nodeNames[DEVICE_GATEWAY]);
+    Serial.print(nodeNames[0]); // Gateway is index 0
     Serial.print(", water level: ");
     Serial.println(level);
   }
 
-  // Send data directly to gateway
+  // Send data directly to gateway and wait for acknowledgment
   bool ok = radio.write(&outgoingData, sizeof(outgoingData));
 
-  if (ok && debugger == 0) {
-    Serial.println("Transmission successful.");
+  if (ok) {
+    if (debugger == 0) {
+      Serial.println("Transmission successful, ACK received.");
+    }
+
+    // Check if there's an acknowledgment payload
+    if (radio.isAckPayloadAvailable()) {
+      // Read the acknowledgment payload
+      radio.read(&incomingData, sizeof(incomingData));
+
+      if (debugger == 0) {
+        Serial.print("Received command in ACK payload, status: ");
+        Serial.println(incomingData.status);
+      }
+
+      // Process commands based on status field
+      switch (incomingData.status) {
+      case 1: // Request for immediate water level reading
+      {
+        // We just sent a reading, no need to send again
+        // Just acknowledge we received the command
+        if (debugger == 0) {
+          Serial.println("Acknowledged request for water level");
+        }
+      } break;
+
+      case 3: // Reset device
+      {
+        Serial.println("Resetting device...");
+        delay(100);
+        // Software reset
+        asm volatile("jmp 0");
+      } break;
+
+      default:
+        // Unknown command
+        if (debugger == 0) {
+          Serial.print("Unknown command: ");
+          Serial.println(incomingData.status);
+        }
+        break;
+      }
+    }
   } else if (debugger == 0) {
-    Serial.println("Transmission failed.");
+    Serial.println("Transmission failed, no ACK received.");
   }
 
-  // Resume listening
+  // Resume listening for any other communications
   radio.startListening();
 }
 
 void radiosetup() {
+  bool hardwareConnected;
   SPI.begin();
-  radio.begin();
+  hardwareConnected = radio.begin();
   radio.setDataRate(RF24_250KBPS);
   radio.setPALevel(RF24_PA_HIGH);
   radio.setChannel(74);
+  radio.enableDynamicPayloads();
+  radio.enableAckPayload();
+  radio.setCRCLength(RF24_CRC_16);
 
   // Enable auto-acknowledgment for reliability
   radio.setAutoAck(true);
 
   // Set retry delay and count
-  radio.setRetries(5, 15);
+  radio.setRetries(15, 15);
 
   // Configure addresses - write to gateway, listen on this node's address
-  radio.openWritingPipe(
-      nodeAddresses[DEVICE_GATEWAY]);                 // Always send to gateway
-  radio.openReadingPipe(1, nodeAddresses[THIS_NODE]); // Listen on our address
+  radio.openWritingPipe(RAINTANK_ADDRESS);   // Always send to gateway
+  radio.openReadingPipe(1, GATEWAY_ADDRESS); // Listen on our address
 
-  // Start in listening mode
-  radio.startListening();
+  // set to transmitting mode
 
-  if (debugger == 0) {
+  printf_begin();
+  if (debugger == 0 && hardwareConnected) {
     Serial.println("Radio initialized");
     Serial.print("Node type: ");
     Serial.print(THIS_NODE);
     Serial.print(" (");
     Serial.print(nodeNames[THIS_NODE]);
     Serial.println(")");
+    Serial.print("Reporting device type: ");
+    Serial.print(THIS_DEVICE);
+    Serial.println(" (tank data)");
   }
+  if (debugger == 0 && !hardwareConnected) {
+    Serial.println("Hardware not connected");
+  }
+
+  radio.printPrettyDetails();
 }
 
 void pinSettings() {
@@ -322,25 +392,6 @@ void receiver() {
     }
 
     // Process commands if this message is from the gateway
-    if (incomingData.deviceType == DEVICE_GATEWAY) {
-      // Handle commands based on status field
-      switch (incomingData.status) {
-      case 1: // Example: Reset device
-        // Implement reset logic
-        break;
-
-      case 2: // Example: Change reporting interval
-        // Could use waterLevel field to store new interval
-        // SCANTIME = incomingData.waterLevel;
-        break;
-
-        // Add more commands as needed
-
-      default:
-        // Unknown command
-        break;
-      }
-    }
   }
 }
 
@@ -366,14 +417,14 @@ void signals(bool scanflag, byte _level) {
 void dataSendTest() {
   radio.stopListening();
 
-  outgoingData.deviceType = THIS_NODE;
+  outgoingData.deviceType = DEVICE_TANKDATA;
   outgoingData.waterLevel = 22; // Test water level
   outgoingData.timeStamp = millis() / 1000;
 
   Serial.print("Test sending from ");
   Serial.print(nodeNames[THIS_NODE]);
   Serial.print(" to ");
-  Serial.print(nodeNames[DEVICE_GATEWAY]);
+  Serial.print(nodeNames[NODE_GATEWAY]);
   Serial.print(", water level: ");
   Serial.println(outgoingData.waterLevel);
 
