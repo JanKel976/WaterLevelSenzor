@@ -22,20 +22,13 @@ RF24 radio(9, 10); //
 
 // Define the addresses for all nodes in the network
 // Using 6-character addresses for each node
-const byte nodeAddresses[][6] = {
-    "GATEW", // Gateway
-    "RAITN", // Rain Tank
-    "SWTCH", // Switchbox
-    "SGRDN", // South Garden
-    "WGRDN", // West Garden
-    "PUMPR"  // Pump Room
-};
+
 
 // Node type definitions (separate from device types)
 
 // Define this node's type
-const byte GATEWAY_ADDRESS[6] = "GATEW";
-const byte RAINTANK_ADDRESS[6] = "RAITN";
+const uint8_t RAITN_addr[5] = {0xF1, 0xB6, 0xB5, 0xB4, 0xB3}; // LSB first
+const uint8_t GATEW_addr[5] = {0x78, 0x78, 0x78, 0x78, 0x78};
 
 // Define this node's device type (what kind of data it reports)
 #define THIS_DEVICE DEVICE_TANKDATA
@@ -58,13 +51,12 @@ Adafruit_NeoPixel pixels(NUMPIXELS, DISPLAYPIN, NEO_GRB);
 // But with clearer field names for this specific node
 struct __attribute__((packed)) dataStruct {
   DeviceType deviceType; // 1 byte - identifies the sending device
-  uint16_t waterLevel;   // For rain tank, this stores water level (using
-                         // temperature field)
-  uint16_t unused1;      // Unused in rain tank (humidity field in gateway)
-  uint16_t unused2;      // Unused in rain tank (timeParam1 field in gateway)
-  uint16_t unused3;      // Unused in rain tank (timeParam2 field in gateway)
-  uint16_t timeStamp;    // Seconds since boot
-  uint16_t unused4;      // Unused in rain tank (co2Level field in gateway)
+  uint16_t timeStamp;   // For rain tank, this stores water level (using
+  uint16_t waterLevel;   // level 1-8 in rain tank (value1 field in gateway)
+  uint16_t unused2;      // Unused in rain tank (value2  field in gateway)
+  uint16_t unused3;      // Unused in rain tank (value3  field in gateway)
+  uint16_t unused4;      // Unused in rain tank (value4  field in gateway)
+  uint16_t unused5;      // Unused in rain tank (value5  field in gateway)
   uint8_t status;        // Status flags
 };
 
@@ -94,11 +86,11 @@ void setup() {
   outgoingData.deviceType =
       THIS_DEVICE;             // Changed from THIS_NODE to THIS_DEVICE
   outgoingData.waterLevel = 0; // Will store water level
-  outgoingData.unused1 = 0;    // Not used
   outgoingData.unused2 = 0;    // Not used
   outgoingData.unused3 = 0;    // Not used
-  outgoingData.timeStamp = 0;  // Will be set when sending
   outgoingData.unused4 = 0;    // Not used
+  outgoingData.timeStamp = 0;  // Will be set when sending
+  outgoingData.unused5 = 0;    // Not used
   outgoingData.status = 0;     // No status flags set initially
 
   radiosetup();
@@ -241,8 +233,8 @@ void radiosetup() {
   radio.setRetries(15, 15);
 
   // Configure addresses - write to gateway, listen on this node's address
-  radio.openWritingPipe(RAINTANK_ADDRESS);   // Always send to gateway
-  radio.openReadingPipe(1, GATEWAY_ADDRESS); // Listen on our address
+  radio.openWritingPipe(RAITN_addr);   // Always send to gateway
+  radio.openReadingPipe(1, GATEW_addr); // Listen on our address
 
   // set to transmitting mode
 
