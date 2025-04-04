@@ -5,6 +5,11 @@
 #include <SPI.h>
 #include <printf.h>
 
+// Command definitions
+#define CMD_REQUEST_LEVEL 1
+#define CMD_RESET_DEVICE 3
+#define CMD_RELAY_CONTROL 5  // New command for relay control
+
 // Node type definitions (must match DeviceType enum in GatewayMain.cpp)
 enum DeviceType : uint8_t {
   DEVICE_MUSHROOM,
@@ -22,7 +27,6 @@ RF24 radio(9, 10); //
 
 // Define the addresses for all nodes in the network
 // Using 6-character addresses for each node
-
 
 // Node type definitions (separate from device types)
 
@@ -51,13 +55,20 @@ Adafruit_NeoPixel pixels(NUMPIXELS, DISPLAYPIN, NEO_GRB);
 // But with clearer field names for this specific node
 struct __attribute__((packed)) dataStruct {
   DeviceType deviceType; // 1 byte - identifies the sending device
-  uint16_t timeStamp;   // For rain tank, this stores water level (using
+  uint16_t timeStamp;    // For rain tank, this stores water level (using
   uint16_t waterLevel;   // level 1-8 in rain tank (value1 field in gateway)
   uint16_t unused2;      // Unused in rain tank (value2  field in gateway)
   uint16_t unused3;      // Unused in rain tank (value3  field in gateway)
   uint16_t unused4;      // Unused in rain tank (value4  field in gateway)
   uint16_t unused5;      // Unused in rain tank (value5  field in gateway)
   uint8_t status;        // Status flags
+};
+
+struct __attribute__((packed)) ackStruct {
+  uint16_t timeStamp;  // Timestamp from gateway
+  uint32_t datum;      // Date/time value as integer
+  uint8_t command;     // Command byte
+  uint16_t extraValue; // Additional integer value for future use
 };
 
 // Function declarations
@@ -67,15 +78,15 @@ void radiosetup();
 void pinSettings();
 void debugInfoSetup();
 uint8_t levelReader();
-void receiver();
 int inputReader(byte i);
 void signals(bool scanflag, byte _level);
 void dataSendTest();
 
 // Global variables
 dataStruct outgoingData;
-dataStruct incomingData;
+ackStruct incomingAck; // New smaller structure for acknowledgements
 bool debugger = 0;
+bool relayState = false;  // Track relay state
 
 void setup() {
   pinSettings();
@@ -83,15 +94,14 @@ void setup() {
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
 
   // Initialize the data structure
-  outgoingData.deviceType =
-      THIS_DEVICE;             // Changed from THIS_NODE to THIS_DEVICE
-  outgoingData.waterLevel = 0; // Will store water level
-  outgoingData.unused2 = 0;    // Not used
-  outgoingData.unused3 = 0;    // Not used
-  outgoingData.unused4 = 0;    // Not used
-  outgoingData.timeStamp = 0;  // Will be set when sending
-  outgoingData.unused5 = 0;    // Not used
-  outgoingData.status = 0;     // No status flags set initially
+  outgoingData.deviceType = THIS_DEVICE;  // Changed from THIS_NODE to THIS_DEVICE
+  outgoingData.waterLevel = 0;            // Will store water level
+  outgoingData.unused2 = 0;               // Not used
+  outgoingData.unused3 = 0;               // Not used
+  outgoingData.unused4 = 0;               // Not used
+  outgoingData.timeStamp = 0;             // Will be set when sending
+  outgoingData.unused5 = 0;               // Not used
+  outgoingData.status = 0;                // No status flags set initially
 
   radiosetup();
 
@@ -139,9 +149,6 @@ void loop() {
   if (millis() - prevtime > 2000)
     scanflag = LOW; // vypnutie oznamenia scanovania
 
-  // No longer need to check for incoming commands here
-  // receiver(); // Remove this line
-
   delay(500);
 }
 
@@ -151,6 +158,9 @@ void sendDataToGateway(uint8_t level) {
 
   // Update timestamp before sending
   outgoingData.timeStamp = millis() / 1000;
+  
+  // Set bit 0 of status to relay state
+  outgoingData.status = (outgoingData.status & 0xFE) | (relayState ? 1 : 0);
 
   if (debugger == 0) {
     Serial.print("Sending data from ");
@@ -171,17 +181,23 @@ void sendDataToGateway(uint8_t level) {
 
     // Check if there's an acknowledgment payload
     if (radio.isAckPayloadAvailable()) {
-      // Read the acknowledgment payload
-      radio.read(&incomingData, sizeof(incomingData));
+      // Read the acknowledgment payload using the smaller structure
+      radio.read(&incomingAck, sizeof(incomingAck));
 
       if (debugger == 0) {
-        Serial.print("Received command in ACK payload, status: ");
-        Serial.println(incomingData.status);
+        Serial.print("Received ACK payload - Timestamp: ");
+        Serial.print(incomingAck.timeStamp);
+        Serial.print(", Datum: ");
+        Serial.print(incomingAck.datum);
+        Serial.print(", Command: ");
+        Serial.print(incomingAck.command);
+        Serial.print(", Extra Value: ");
+        Serial.println(incomingAck.extraValue);
       }
 
-      // Process commands based on status field
-      switch (incomingData.status) {
-      case 1: // Request for immediate water level reading
+      // Process commands based on command byte
+      switch (incomingAck.command) {
+      case CMD_REQUEST_LEVEL: // Request for immediate water level reading
       {
         // We just sent a reading, no need to send again
         // Just acknowledge we received the command
@@ -190,19 +206,37 @@ void sendDataToGateway(uint8_t level) {
         }
       } break;
 
-      case 3: // Reset device
+      case CMD_RESET_DEVICE: // Reset device
       {
         Serial.println("Resetting device...");
         delay(100);
         // Software reset
         asm volatile("jmp 0");
       } break;
+      
+      case CMD_RELAY_CONTROL: // Relay control
+      {
+        // Use extraValue to determine relay state (0 = OFF, 1 = ON)
+        if (incomingAck.extraValue == 1 && !relayState) {
+          digitalWrite(RELEPIN, HIGH);
+          relayState = true;
+          if (debugger == 0) {
+            Serial.println("Relay turned ON by gateway command");
+          }
+        } else if (incomingAck.extraValue == 0 && relayState) {
+          digitalWrite(RELEPIN, LOW);
+          relayState = false;
+          if (debugger == 0) {
+            Serial.println("Relay turned OFF by gateway command");
+          }
+        }
+      } break;
 
       default:
         // Unknown command
         if (debugger == 0) {
           Serial.print("Unknown command: ");
-          Serial.println(incomingData.status);
+          Serial.println(incomingAck.command);
         }
         break;
       }
@@ -233,7 +267,7 @@ void radiosetup() {
   radio.setRetries(15, 15);
 
   // Configure addresses - write to gateway, listen on this node's address
-  radio.openWritingPipe(RAITN_addr);   // Always send to gateway
+  radio.openWritingPipe(RAITN_addr);    // Always send to gateway
   radio.openReadingPipe(1, GATEW_addr); // Listen on our address
 
   // set to transmitting mode
@@ -328,15 +362,27 @@ uint8_t levelReader() {
 
 int inputReader(byte pin) {
   int pinValue;
+  bool tempRelayState = relayState; // Save current relay state if controlled by gateway
+  
   if (debugger == 1) {
     Serial.print(" 242 pin ");
     Serial.print(pin);
   }
+  
   if (pin == 21 || pin == 20) {
-    digitalWrite(RELEPIN, HIGH);
+    // Only toggle relay if not controlled by gateway
+    if (!tempRelayState) {
+      digitalWrite(RELEPIN, HIGH);
+    }
+    
     delay(20);
     pinValue = analogRead(pin);
-    digitalWrite(RELEPIN, LOW);
+    
+    // Only turn off if not controlled by gateway
+    if (!tempRelayState) {
+      digitalWrite(RELEPIN, LOW);
+    }
+    
     delay(200);
   } else {
     pinMode(pin, INPUT_PULLUP);
@@ -344,6 +390,7 @@ int inputReader(byte pin) {
     pinValue = analogRead(pin);
     pinMode(pin, INPUT);
   }
+  
   if (debugger == 1) {
     Serial.print("  177  pinValue = ");
     Serial.println(pinValue);
@@ -360,31 +407,6 @@ void neopixel(uint8_t level) {
   }
 
   pixels.show();
-}
-
-void receiver() {
-  // Check if there is data available
-  if (radio.available()) {
-    // Read the incoming data
-    radio.read(&incomingData, sizeof(incomingData));
-
-    if (debugger == 0) {
-      Serial.print("Received packet from node: ");
-      Serial.print(incomingData.deviceType);
-      if (incomingData.deviceType < 6) {
-        Serial.print(" (");
-        Serial.print(nodeNames[incomingData.deviceType]);
-        Serial.println(")");
-      } else {
-        Serial.println(" (unknown)");
-      }
-
-      Serial.print("Status: ");
-      Serial.println(incomingData.status);
-    }
-
-    // Process commands if this message is from the gateway
-  }
 }
 
 void signals(bool scanflag, byte _level) {

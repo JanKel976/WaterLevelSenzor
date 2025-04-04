@@ -1,0 +1,43 @@
+void receiver() {
+  // Check if there is data available
+  if (radio.available()) {
+    // Read the incoming data - use the new structure
+    radio.read(&incomingAck, sizeof(incomingAck));
+
+    if (debugger == 0) {
+      Serial.print("Received packet - Timestamp: ");
+      Serial.print(incomingAck.timeStamp);
+      Serial.print(", Datum: ");
+      Serial.print(incomingAck.datum);
+      Serial.print(", Command: ");
+      Serial.println(incomingAck.command);
+      Serial.print(", Extra Value: ");
+      Serial.println(incomingAck.extraValue);
+    }
+
+    // Process commands if needed
+    switch (incomingAck.command) {
+    case 1: // Request for immediate water level reading
+    {
+      // Handle command
+      if (debugger == 0) { Serial.println("Received request for water level"); }
+    } break;
+
+    case 3: // Reset device
+    {
+      Serial.println("Resetting device...");
+      delay(100);
+      // Software reset
+      asm volatile("jmp 0");
+    } break;
+
+    default:
+      // Unknown command
+      if (debugger == 0) {
+        Serial.print("Unknown command: ");
+        Serial.println(incomingAck.command);
+      }
+      break;
+    }
+  }
+}
