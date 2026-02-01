@@ -68,7 +68,7 @@ struct __attribute__((packed)) ackStruct {
   uint16_t timeStamp;  // Timestamp from gateway
   uint32_t datum;      // Date/time value as integer
   uint8_t command;     // Command byte
-  uint16_t extraValue; // Additional integer value for future use
+  uint8_t extraValue;  // Additional value (must match gateway's Device_types.h)
 };
 
 // Function declarations
@@ -87,6 +87,7 @@ dataStruct outgoingData;
 ackStruct incomingAck; // New smaller structure for acknowledgements
 bool debugger = 0;
 bool relayState = false;  // Track relay state
+uint8_t consecutiveFailures = 0;  // Track transmission failures for recovery
 
 void setup() {
   pinSettings();
@@ -175,6 +176,7 @@ void sendDataToGateway(uint8_t level) {
   bool ok = radio.write(&outgoingData, sizeof(outgoingData));
 
   if (ok) {
+    consecutiveFailures = 0;  // Reset failure counter on success
     if (debugger == 0) {
       Serial.println("Transmission successful, ACK received.");
     }
@@ -241,8 +243,18 @@ void sendDataToGateway(uint8_t level) {
         break;
       }
     }
-  } else if (debugger == 0) {
-    Serial.println("Transmission failed, no ACK received.");
+  } else {
+    consecutiveFailures++;
+    Serial.print("Transmission failed, no ACK received. (");
+    Serial.print(consecutiveFailures);
+    Serial.println("/5)");
+    
+    // Reinitialize radio after 3 consecutive failures
+    if (consecutiveFailures >= 3) {
+      Serial.println(">>> Reinitializing radio...");
+      radiosetup();
+      consecutiveFailures = 0;
+    }
   }
 
   // Resume listening for any other communications
@@ -250,9 +262,30 @@ void sendDataToGateway(uint8_t level) {
 }
 
 void radiosetup() {
-  bool hardwareConnected;
+  Serial.print("Initializing radio...");
+  
+  // Wait for power to stabilize (important after reset)
+  delay(100);
+  
   SPI.begin();
-  hardwareConnected = radio.begin();
+  
+  // Try radio initialization up to 3 times
+  bool hardwareConnected = false;
+  for (uint8_t attempt = 0; attempt < 3; attempt++) {
+    hardwareConnected = radio.begin();
+    if (hardwareConnected) {
+      break;
+    }
+    Serial.print(" retry ");
+    Serial.print(attempt + 1);
+    delay(200);
+  }
+  
+  if (!hardwareConnected) {
+    Serial.println(" FAILED!");
+    return;
+  }
+  
   radio.setDataRate(RF24_250KBPS);
   radio.setPALevel(RF24_PA_HIGH);
   radio.setChannel(74);
@@ -270,23 +303,15 @@ void radiosetup() {
   radio.openWritingPipe(RAITN_addr);    // Always send to gateway
   radio.openReadingPipe(1, GATEW_addr); // Listen on our address
 
-  // set to transmitting mode
+  // Start in listening mode
+  radio.startListening();
 
   printf_begin();
-  if (debugger == 0 && hardwareConnected) {
-    Serial.println("Radio initialized");
-    Serial.print("Node type: ");
-    Serial.print(THIS_NODE);
-    Serial.print(" (");
-    Serial.print(nodeNames[THIS_NODE]);
-    Serial.println(")");
-    Serial.print("Reporting device type: ");
-    Serial.print(THIS_DEVICE);
-    Serial.println(" (tank data)");
-  }
-  if (debugger == 0 && !hardwareConnected) {
-    Serial.println("Hardware not connected");
-  }
+  Serial.println(" OK");
+  Serial.print("Node: ");
+  Serial.print(nodeNames[THIS_NODE]);
+  Serial.print(", Device type: ");
+  Serial.println(THIS_DEVICE);
 
   radio.printPrettyDetails();
 }
